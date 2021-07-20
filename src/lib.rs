@@ -8,7 +8,6 @@ use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::mem::transmute;
-use std::sync::Arc;
 use std::fmt::Debug;
 
 #[derive(Debug)]
@@ -67,24 +66,30 @@ where
     }
 
     // The item is copied over
-    pub fn set(&mut self, item: T) -> Option<T> {
-        let item_arc = Arc::new(item);
-        let item_ptr = Arc::into_raw(item_arc);
+    pub fn set(&mut self, item: T) -> Option<&mut T> {
         let prev_pointer = unsafe { 
-            btree_set(self.btree, item_ptr as *mut T as *mut c_void)
+            btree_set(self.btree, &item as *const T as *mut T as *mut c_void)
         };
 
         if prev_pointer.is_null() {
             return None;
         }
 
-        let prev = unsafe { Arc::from_raw(prev_pointer as *const T) };
-        let prev = Arc::try_unwrap(prev).unwrap();
-        Some(prev)
+        let mut prev = std::ptr::NonNull::new(prev_pointer as *mut T).unwrap();
+        Some(unsafe { prev.as_mut() })
     }
 
-    pub fn get(&self, key: String) -> Option<Arc<T>> {
-        todo!()
+    pub fn get(&self, item: T) -> Option<&T> {
+        let item_pointer = unsafe { 
+            btree_get(self.btree, &item as *const T as *mut T as *mut c_void)
+        };
+
+        if item_pointer.is_null() {
+            return None;
+        }
+
+        let prev = std::ptr::NonNull::new(item_pointer as *mut T).unwrap();
+        Some(unsafe { prev.as_ref() })
     }
 }
 
@@ -117,17 +122,17 @@ fn set() {
     }
 
     let mut btree = BTreeC::new(|a: &TestItem, b: &TestItem| {
-        a.cmp(b)
+        a.key.cmp(&b.key)
     });
 
     let maybe_prev = btree.set(TestItem { key: "foo".to_string(), value: 1 });
     assert!(maybe_prev.is_none());
     assert_eq!(btree.count(), 1);
-    let prev = btree.set(TestItem { key: "bar".to_string(), value: 2 }).unwrap();
+    let prev = btree.set(TestItem { key: "foo".to_string(), value: 2 }).unwrap();
     assert_eq!(prev.key, "foo");
     assert_eq!(prev.value, 1);
     assert_eq!(btree.count(), 1);
-    let item = btree.get("bar".to_string()).unwrap();
-    assert_eq!(prev.key, "bar");
-    assert_eq!(prev.value, 2);
+    // value is ignored in this case, because we're only comparing keys in the `compare` function
+    let item = btree.get(TestItem { key: "foo".to_string(), value: 0 }).unwrap();
+    assert_eq!(item.value, 2);
 }
