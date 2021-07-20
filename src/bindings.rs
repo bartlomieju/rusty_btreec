@@ -20,7 +20,7 @@ extern "C" {
     pub fn btree_new(
         elsize: size_t,
         max_items: size_t,
-        compare: unsafe extern "C" fn(a: *const c_void, b: *const c_void, udata: *mut c_void) -> c_int,
+        compare: CompareCallback,
         udata: *mut c_void,
     ) -> *mut btree;
     pub fn btree_free(btree: *mut btree);
