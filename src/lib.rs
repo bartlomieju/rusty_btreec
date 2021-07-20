@@ -67,29 +67,42 @@ where
 
     // The item is copied over
     pub fn set(&mut self, item: T) -> Option<&mut T> {
-        let prev_pointer = unsafe { 
+        let prev_ptr = unsafe { 
             btree_set(self.btree, &item as *const T as *mut T as *mut c_void)
         };
 
-        if prev_pointer.is_null() {
+        if prev_ptr.is_null() {
             return None;
         }
 
-        let mut prev = std::ptr::NonNull::new(prev_pointer as *mut T).unwrap();
+        let mut prev = std::ptr::NonNull::new(prev_ptr as *mut T).unwrap();
         Some(unsafe { prev.as_mut() })
     }
 
-    pub fn get(&self, item: T) -> Option<&T> {
-        let item_pointer = unsafe { 
-            btree_get(self.btree, &item as *const T as *mut T as *mut c_void)
+    pub fn get(&self, key: T) -> Option<&T> {
+        let item_ptr = unsafe { 
+            btree_get(self.btree, &key as *const T as *mut T as *mut c_void)
         };
 
-        if item_pointer.is_null() {
+        if item_ptr.is_null() {
             return None;
         }
 
-        let prev = std::ptr::NonNull::new(item_pointer as *mut T).unwrap();
-        Some(unsafe { prev.as_ref() })
+        let item = std::ptr::NonNull::new(item_ptr as *mut T).unwrap();
+        Some(unsafe { item.as_ref() })
+    }
+
+    pub fn delete(&self, key: T) -> Option<&mut T> {
+        let item_ptr = unsafe { 
+            btree_delete(self.btree, &key as *const T as *mut T as *mut c_void)
+        };
+
+        if item_ptr.is_null() {
+            return None;
+        }
+
+        let mut item = std::ptr::NonNull::new(item_ptr as *mut T).unwrap();
+        Some(unsafe { item.as_mut() })
     }
 }
 
@@ -113,9 +126,9 @@ fn not_really_a_test() {
 }
 
 #[test]
-fn set() {
+fn get_set() {
     #[repr(C)]
-    #[derive(Debug, Eq, PartialEq, PartialOrd, Ord)]
+    #[derive(Debug, Default, Clone)]
     struct TestItem {
         key: String,
         value: i64
@@ -125,14 +138,25 @@ fn set() {
         a.key.cmp(&b.key)
     });
 
+    // we'll use this struct for querying the tree
+    // value is ignored in this case, because we're only comparing keys in the `compare` function
+    let key = TestItem {
+        key: "foo".to_string(),
+        ..Default::default()
+    };
+
     let maybe_prev = btree.set(TestItem { key: "foo".to_string(), value: 1 });
     assert!(maybe_prev.is_none());
     assert_eq!(btree.count(), 1);
+
     let prev = btree.set(TestItem { key: "foo".to_string(), value: 2 }).unwrap();
     assert_eq!(prev.key, "foo");
     assert_eq!(prev.value, 1);
     assert_eq!(btree.count(), 1);
-    // value is ignored in this case, because we're only comparing keys in the `compare` function
-    let item = btree.get(TestItem { key: "foo".to_string(), value: 0 }).unwrap();
+    
+    let item = btree.get(key.clone()).unwrap();
     assert_eq!(item.value, 2);
+
+    assert!(btree.delete(key.clone()).is_some());
+    assert!(btree.get(key.clone()).is_none());
 }
