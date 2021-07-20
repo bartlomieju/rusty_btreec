@@ -121,7 +121,7 @@ where
             I: FnMut(&T) -> bool,
         {
             let item = &*(item as *const T);
-            let mut iter_fn = transmute::<*mut c_void, *mut I>(user_data);
+            let iter_fn = transmute::<*mut c_void, *mut I>(user_data);
             (*iter_fn)(item)
         }
 
@@ -197,6 +197,7 @@ fn ascend_descend() {
     let mut ascending = vec![];
     let mut ascending_with_pivot = vec![];
 
+    #[repr(C)]
     #[derive(Debug, Default, Clone)]
     struct User {
         first: String,
@@ -221,12 +222,15 @@ fn ascend_descend() {
             result = a.first.cmp(&b.first);
         }
 
+        // if result == Ordering::Equal 
+        eprintln!("a {:#?} b {:#?} cmp {:#?}", a, b, result);
         result
     });
 
     btree.set(User::new("Dale", "Murphy", 44));
     btree.set(User::new("Roger", "Craig", 68));
     btree.set(User::new("Jane", "Murphy", 47));
+    assert_eq!(btree.count(), 3);
 
     btree.ascend(None, |item| {
         eprintln!("item {:#?}", item);
