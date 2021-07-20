@@ -104,6 +104,38 @@ where
         let mut item = std::ptr::NonNull::new(item_ptr as *mut T).unwrap();
         Some(unsafe { item.as_mut() })
     }
+
+    pub fn ascend<I>(
+        &self,
+        maybe_pivot: Option<T>,
+        iter_fn: I,
+    ) -> bool 
+    where
+        I: FnMut(&T) -> bool 
+    {
+        unsafe extern "C" fn iter_trampoline<T, I>(
+            item: *const c_void,
+            user_data: *mut c_void,
+        ) -> bool
+        where
+            I: FnMut(&T) -> bool,
+        {
+            let item = &*(item as *const T);
+            let mut iter_fn = transmute::<*mut c_void, *mut I>(user_data);
+            (*iter_fn)(item)
+        }
+
+        let mut iter_fn = Box::new(iter_fn);
+        let user_data = unsafe { transmute::<*mut I, *mut c_void>(&mut *iter_fn) };
+
+        let pivot_ptr = if let Some(pivot) = maybe_pivot {
+            &pivot as *const T as *mut T as *mut c_void
+        } else {
+            std::ptr::null::<T>() as *mut c_void
+        };
+
+        unsafe { btree_ascend(self.btree, pivot_ptr, iter_trampoline::<T, I>, user_data) }
+    }
 }
 
 impl<T: Debug, F> Drop for BTreeC<T, F> {
@@ -127,7 +159,6 @@ fn not_really_a_test() {
 
 #[test]
 fn get_set() {
-    #[repr(C)]
     #[derive(Debug, Default, Clone)]
     struct TestItem {
         key: String,
@@ -159,4 +190,65 @@ fn get_set() {
 
     assert!(btree.delete(key.clone()).is_some());
     assert!(btree.get(key.clone()).is_none());
+}
+
+#[test]
+fn ascend_descend() {
+    let mut ascending = vec![];
+    let mut ascending_with_pivot = vec![];
+
+    #[derive(Debug, Default, Clone)]
+    struct User {
+        first: String,
+        last: String,
+        age: i64,
+    }
+
+    impl User {
+        fn new(first: &str, last: &str, age: i64) -> Self {
+            Self {
+                first: first.to_string(),
+                last: last.to_string(),
+                age,
+            }
+        }
+    }
+
+    let mut btree = BTreeC::new(|a: &User, b: &User| {
+        let mut result = a.last.cmp(&b.last);
+        
+        if result == Ordering::Equal {
+            result = a.first.cmp(&b.first);
+        }
+
+        result
+    });
+
+    btree.set(User::new("Dale", "Murphy", 44));
+    btree.set(User::new("Roger", "Craig", 68));
+    btree.set(User::new("Jane", "Murphy", 47));
+
+    btree.ascend(None, |item| {
+        eprintln!("item {:#?}", item);
+        ascending.push(format!("{} {} {}", item.first, item.last, item.age));
+        true
+    });
+
+    assert_eq!(ascending, vec![
+        "Roger Craig 68",
+        "Dale Murphy 44",
+        "Jane Murphy 47"
+    ]);
+    
+    let pivot = User::new("", "Murphy", 0);
+    btree.ascend(Some(pivot), |item| {
+        eprintln!("item {:#?}", item);
+        ascending_with_pivot.push(format!("{} {} {}", item.first, item.last, item.age));
+        true
+    });
+
+    assert_eq!(ascending_with_pivot, vec![
+        "Dale Murphy 44",
+        "Jane Murphy 47"
+    ]);
 }
