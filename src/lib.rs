@@ -9,6 +9,35 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::mem::transmute;
+use std::ptr;
+
+unsafe extern "C" fn compare_trampoline<T, F>(
+    a: *const c_void,
+    b: *const c_void,
+    user_data: *mut c_void,
+) -> i32
+where
+    F: Fn(&T, &T) -> Ordering,
+{
+    let a = &*(a as *const T);
+    let b = &*(b as *const T);
+    let compare_fn = transmute::<*mut c_void, *const F>(user_data);
+    let r = (*compare_fn)(a, b);
+    match r {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
+    }
+}
+
+unsafe extern "C" fn iter_trampoline<T, I>(item: *const c_void, user_data: *mut c_void) -> bool
+where
+    I: FnMut(&T) -> bool,
+{
+    let item = &*(item as *const T);
+    let iter_fn = transmute::<*mut c_void, *mut I>(user_data);
+    (*iter_fn)(item)
+}
 
 #[repr(C)]
 #[derive(Debug)]
@@ -23,29 +52,17 @@ where
     F: Fn(&T, &T) -> Ordering,
 {
     pub fn new(compare_fn: F) -> Self {
-        unsafe extern "C" fn trampoline<T, F>(
-            a: *const c_void,
-            b: *const c_void,
-            user_data: *mut c_void,
-        ) -> i32
-        where
-            F: Fn(&T, &T) -> Ordering,
-        {
-            let a = &*(a as *const T);
-            let b = &*(b as *const T);
-            let compare_fn = transmute::<*mut c_void, *const F>(user_data);
-            let r = (*compare_fn)(a, b);
-            match r {
-                Ordering::Less => -1,
-                Ordering::Equal => 0,
-                Ordering::Greater => 1,
-            }
-        }
-
         let compare_fn = Box::new(compare_fn);
         let user_data = unsafe { transmute::<*const F, *mut c_void>(&*compare_fn) };
 
-        let p = unsafe { btree_new(size_of::<T>() as u64, 0, trampoline::<T, F>, user_data) };
+        let p = unsafe {
+            btree_new(
+                size_of::<T>() as u64,
+                0,
+                compare_trampoline::<T, F>,
+                user_data,
+            )
+        };
         Self {
             btree: p,
             _compare_fn: compare_fn,
@@ -65,16 +82,19 @@ where
         unsafe { btree_count(self.btree) }
     }
 
-    // The item is copied over
+    // TODO: should return Option<T>
     pub fn set(&mut self, mut item: T) -> Option<&mut T> {
         let item_ptr: *mut c_void = &mut item as *mut _ as *mut c_void;
         let prev_ptr = unsafe { btree_set(self.btree, item_ptr) };
+        // C code has copied over the data, forget it so Rust doesn't run
+        // Drop handler
+        std::mem::forget(item);
 
         if prev_ptr.is_null() {
             return None;
         }
 
-        let mut prev = std::ptr::NonNull::new(prev_ptr as *mut T).unwrap();
+        let mut prev = ptr::NonNull::new(prev_ptr as *mut T).unwrap();
         Some(unsafe { prev.as_mut() })
     }
 
@@ -82,41 +102,85 @@ where
         let item_ptr = unsafe { btree_get(self.btree, &key as *const T as *mut T as *mut c_void) };
 
         if item_ptr.is_null() {
-            return None;
+            None
+        } else {
+            Some(unsafe { ptr::NonNull::new(item_ptr as *mut T).unwrap().as_ref() })
         }
-
-        let item = std::ptr::NonNull::new(item_ptr as *mut T).unwrap();
-        Some(unsafe { item.as_ref() })
     }
 
-    pub fn delete(&self, key: T) -> Option<&mut T> {
+    // TODO: should return Option<T>
+    pub fn delete(&mut self, key: T) -> Option<&mut T> {
         let item_ptr =
             unsafe { btree_delete(self.btree, &key as *const T as *mut T as *mut c_void) };
 
         if item_ptr.is_null() {
-            return None;
+            None
+        } else {
+            Some(unsafe { ptr::NonNull::new(item_ptr as *mut T).unwrap().as_mut() })
         }
+    }
 
-        let mut item = std::ptr::NonNull::new(item_ptr as *mut T).unwrap();
-        Some(unsafe { item.as_mut() })
+    // TODO: should return Option<T>
+    pub fn pop_min(&mut self) -> Option<&mut T> {
+        let item_ptr = unsafe { btree_pop_min(self.btree) };
+
+        if item_ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { ptr::NonNull::new(item_ptr as *mut T).unwrap().as_mut() })
+        }
+    }
+
+    // TODO: should return Option<T>
+    pub fn pop_max(&mut self) -> Option<&mut T> {
+        let item_ptr = unsafe { btree_pop_max(self.btree) };
+
+        if item_ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { ptr::NonNull::new(item_ptr as *mut T).unwrap().as_mut() })
+        }
+    }
+
+    pub fn min(&self) -> Option<&T> {
+        let item_ptr = unsafe { btree_min(self.btree) };
+
+        if item_ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { ptr::NonNull::new(item_ptr as *mut T).unwrap().as_ref() })
+        }
+    }
+
+    pub fn max(&self) -> Option<&T> {
+        let item_ptr = unsafe { btree_max(self.btree) };
+
+        if item_ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { ptr::NonNull::new(item_ptr as *mut T).unwrap().as_ref() })
+        }
+    }
+
+    // TODO: should return Option<T>
+    pub fn load(&mut self, mut item: T) -> Option<&mut T> {
+        let item_ptr: *mut c_void = &mut item as *mut _ as *mut c_void;
+        let prev_ptr = unsafe { btree_load(self.btree, item_ptr) };
+        // C code has copied over the data, forget it so Rust doesn't run
+        // Drop handler
+        std::mem::forget(item);
+
+        if prev_ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { ptr::NonNull::new(prev_ptr as *mut T).unwrap().as_mut() })
+        }
     }
 
     pub fn ascend<I>(&self, maybe_pivot: Option<T>, iter_fn: I) -> bool
     where
         I: FnMut(&T) -> bool,
     {
-        unsafe extern "C" fn iter_trampoline<T, I>(
-            item: *const c_void,
-            user_data: *mut c_void,
-        ) -> bool
-        where
-            I: FnMut(&T) -> bool,
-        {
-            let item = &*(item as *const T);
-            let iter_fn = transmute::<*mut c_void, *mut I>(user_data);
-            (*iter_fn)(item)
-        }
-
         let mut iter_fn = Box::new(iter_fn);
         let user_data = unsafe { transmute::<*mut I, *mut c_void>(&mut *iter_fn) };
 
@@ -127,6 +191,22 @@ where
         };
 
         unsafe { btree_ascend(self.btree, pivot_ptr, iter_trampoline::<T, I>, user_data) }
+    }
+
+    pub fn descend<I>(&self, maybe_pivot: Option<T>, iter_fn: I) -> bool
+    where
+        I: FnMut(&T) -> bool,
+    {
+        let mut iter_fn = Box::new(iter_fn);
+        let user_data = unsafe { transmute::<*mut I, *mut c_void>(&mut *iter_fn) };
+
+        let pivot_ptr = if let Some(pivot) = maybe_pivot {
+            &pivot as *const T as *mut T as *mut c_void
+        } else {
+            std::ptr::null::<T>() as *mut c_void
+        };
+
+        unsafe { btree_descend(self.btree, pivot_ptr, iter_trampoline::<T, I>, user_data) }
     }
 }
 
@@ -170,8 +250,8 @@ mod tests {
     fn get_set() {
         #[derive(Debug, Default, Clone)]
         struct TestItem {
-            key: &'static str,
-            text: &'static str,
+            key: String,
+            text: String,
             value: i64,
         }
 
@@ -180,25 +260,26 @@ mod tests {
         // we'll use this struct for querying the tree
         // value is ignored in this case, because we're only comparing keys in the `compare` function
         let key = TestItem {
-            key: "foo",
+            key: "foo".to_string(),
             ..Default::default()
         };
 
-        let maybe_prev = btree.set(TestItem {
-            key: "foo",
-            text: "hello world",
+        let item1 = TestItem {
+            key: "foo".to_string(),
+            text: "hello world".to_string(),
             value: 1,
-        });
+        };
+        let maybe_prev = btree.set(item1);
         assert!(maybe_prev.is_none());
         assert_eq!(btree.count(), 1);
 
-        let prev = btree
-            .set(TestItem {
-                key: "foo",
-                text: "hello world2",
-                value: 2,
-            })
-            .unwrap();
+        let item2 = TestItem {
+            key: "foo".to_string(),
+            text: "hello world2".to_string(),
+            value: 2,
+        };
+        let prev = btree.set(item2).unwrap();
+        // std::mem::forget(item2);
         assert_eq!(prev.key, "foo");
         assert_eq!(prev.value, 1);
         assert_eq!(btree.count(), 1);
@@ -214,6 +295,8 @@ mod tests {
     fn ascend_descend() {
         let mut ascending = vec![];
         let mut ascending_with_pivot = vec![];
+        let mut descending = vec![];
+        let mut descending_with_pivot = vec![];
 
         let mut btree = BTreeC::new(|a: &User, b: &User| {
             let mut result = a.last.cmp(&b.last);
@@ -234,7 +317,6 @@ mod tests {
             ascending.push(format!("{} {} {}", item.first, item.last, item.age));
             true
         });
-
         assert_eq!(
             ascending,
             vec!["Roger Craig 68", "Dale Murphy 44", "Jane Murphy 47"]
@@ -245,11 +327,26 @@ mod tests {
             ascending_with_pivot.push(format!("{} {} {}", item.first, item.last, item.age));
             true
         });
-
         assert_eq!(
             ascending_with_pivot,
             vec!["Dale Murphy 44", "Jane Murphy 47"]
         );
+
+        btree.descend(None, |item| {
+            descending.push(format!("{} {} {}", item.first, item.last, item.age));
+            true
+        });
+        assert_eq!(
+            descending,
+            vec!["Jane Murphy 47", "Dale Murphy 44", "Roger Craig 68"]
+        );
+
+        let pivot = User::new("", "Murphy", 0);
+        btree.descend(Some(pivot), |item| {
+            descending_with_pivot.push(format!("{} {} {}", item.first, item.last, item.age));
+            true
+        });
+        assert_eq!(descending_with_pivot, vec!["Roger Craig 68"]);
     }
 
     #[test]
