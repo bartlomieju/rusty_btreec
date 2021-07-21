@@ -10,6 +10,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::mem::transmute;
 
+#[repr(C)]
 #[derive(Debug)]
 pub struct BTreeC<T: Debug, F> {
     btree: *mut btree,
@@ -65,8 +66,9 @@ where
     }
 
     // The item is copied over
-    pub fn set(&mut self, item: T) -> Option<&mut T> {
-        let prev_ptr = unsafe { btree_set(self.btree, &item as *const T as *mut T as *mut c_void) };
+    pub fn set(&mut self, mut item: T) -> Option<&mut T> {
+        let item_ptr: *mut c_void = &mut item as *mut _ as *mut c_void;
+        let prev_ptr = unsafe { btree_set(self.btree, item_ptr) };
 
         if prev_ptr.is_null() {
             return None;
@@ -137,22 +139,17 @@ impl<T: Debug, F> Drop for BTreeC<T, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CString;
 
     #[derive(Debug, Default, Clone)]
     struct User {
-        first: CString,
-        last: CString,
+        first: &'static str,
+        last: &'static str,
         age: i64,
     }
 
     impl User {
-        fn new(first: &str, last: &str, age: i64) -> Self {
-            Self {
-                first: CString::new(first).unwrap(),
-                last: CString::new(last).unwrap(),
-                age,
-            }
+        fn new(first: &'static str, last: &'static str, age: i64) -> Self {
+            Self { first, last, age }
         }
     }
 
@@ -173,45 +170,40 @@ mod tests {
     fn get_set() {
         #[derive(Debug, Default, Clone)]
         struct TestItem {
-            key: String,
+            key: &'static str,
+            text: &'static str,
             value: i64,
-            text: String,
         }
 
-        let mut btree = BTreeC::new(|a: &TestItem, b: &TestItem| {
-            eprintln!("compare {:#?} {:#?}", a, b);
-            a.key.cmp(&b.key)
-        });
+        let mut btree = BTreeC::new(|a: &TestItem, b: &TestItem| a.key.cmp(&b.key));
 
         // we'll use this struct for querying the tree
         // value is ignored in this case, because we're only comparing keys in the `compare` function
         let key = TestItem {
-            key: "foo".to_string(),
+            key: "foo",
             ..Default::default()
         };
 
         let maybe_prev = btree.set(TestItem {
-            key: "foo".to_string(),
+            key: "foo",
+            text: "hello world",
             value: 1,
-            text: "hello world".to_string()
         });
         assert!(maybe_prev.is_none());
         assert_eq!(btree.count(), 1);
 
         let prev = btree
             .set(TestItem {
-                key: "foo".to_string(),
+                key: "foo",
+                text: "hello world2",
                 value: 2,
-                text: "hello world2".to_string(),
             })
             .unwrap();
-        eprintln!("prev {:#?}", prev);
         assert_eq!(prev.key, "foo");
         assert_eq!(prev.value, 1);
         assert_eq!(btree.count(), 1);
 
         let item = btree.get(key.clone()).unwrap();
-        eprintln!("item {:#?}", item);
         assert_eq!(item.value, 2);
 
         assert!(btree.delete(key.clone()).is_some());
@@ -221,7 +213,7 @@ mod tests {
     #[test]
     fn ascend_descend() {
         let mut ascending = vec![];
-        // let mut ascending_with_pivot = vec![];
+        let mut ascending_with_pivot = vec![];
 
         let mut btree = BTreeC::new(|a: &User, b: &User| {
             let mut result = a.last.cmp(&b.last);
@@ -230,8 +222,6 @@ mod tests {
                 result = a.first.cmp(&b.first);
             }
 
-            // if result == Ordering::Equal
-            eprintln!("a {:#?} b {:#?} cmp {:#?}", a, b, result);
             result
         });
 
@@ -241,8 +231,7 @@ mod tests {
         assert_eq!(btree.count(), 3);
 
         btree.ascend(None, |item| {
-            eprintln!("item {:#?}", item);
-            ascending.push(format!("{:?} {:?} {}", item.first, item.last, item.age));
+            ascending.push(format!("{} {} {}", item.first, item.last, item.age));
             true
         });
 
@@ -251,16 +240,15 @@ mod tests {
             vec!["Roger Craig 68", "Dale Murphy 44", "Jane Murphy 47"]
         );
 
-        // let pivot = User::new("", "Murphy", 0);
-        // btree.ascend(Some(pivot), |item| {
-        //     eprintln!("item {:#?}", item);
-        //     ascending_with_pivot.push(format!("{} {} {}", item.first, item.last, item.age));
-        //     true
-        // });
+        let pivot = User::new("", "Murphy", 0);
+        btree.ascend(Some(pivot), |item| {
+            ascending_with_pivot.push(format!("{} {} {}", item.first, item.last, item.age));
+            true
+        });
 
-        // assert_eq!(ascending_with_pivot, vec![
-        //     "Dale Murphy 44",
-        //     "Jane Murphy 47"
-        // ]);
+        assert_eq!(
+            ascending_with_pivot,
+            vec!["Dale Murphy 44", "Jane Murphy 47"]
+        );
     }
 }
