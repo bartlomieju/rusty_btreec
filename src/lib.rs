@@ -91,11 +91,10 @@ where
         std::mem::forget(item);
 
         if prev_ptr.is_null() {
-            return None;
+            None
+        } else {
+            Some(unsafe { ptr::NonNull::new(prev_ptr as *mut T).unwrap().as_mut() })
         }
-
-        let mut prev = ptr::NonNull::new(prev_ptr as *mut T).unwrap();
-        Some(unsafe { prev.as_mut() })
     }
 
     pub fn get(&self, key: T) -> Option<&T> {
@@ -247,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn get_set() {
+    fn basic() {
         #[derive(Debug, Default, Clone)]
         struct TestItem {
             key: String,
@@ -289,6 +288,24 @@ mod tests {
 
         assert!(btree.delete(key.clone()).is_some());
         assert!(btree.get(key.clone()).is_none());
+    }
+
+    #[test]
+    fn min_max_pop() {
+        let mut btree = BTreeC::new(|a: &i64, b: &i64| a.cmp(b));
+        btree.set(3);
+        btree.set(4);
+        btree.set(5);
+
+        let min_ = btree.min().unwrap();
+        assert_eq!(min_, &3);
+        let min_ = btree.pop_min().unwrap();
+        assert_eq!(min_, &3);
+        let max_ = btree.max().unwrap();
+        assert_eq!(max_, &5);
+        let max_ = btree.pop_max().unwrap();
+        assert_eq!(max_, &5);
+        assert_eq!(btree.count(), 1);
     }
 
     #[test]
