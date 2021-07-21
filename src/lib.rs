@@ -251,4 +251,54 @@ mod tests {
             vec!["Dale Murphy 44", "Jane Murphy 47"]
         );
     }
+
+    #[test]
+    fn db_item() {
+        /// DbItemOpts holds various meta information about an item.
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        pub struct DbItemOpts {
+            /// does this item expire?
+            ex: bool,
+            /// when does this item expire?
+            exat: std::time::Instant,
+        }
+
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        pub struct DbItem {
+            // the binary key
+            key: &'static str,
+            // the binary value
+            val: &'static str,
+            // optional meta information
+            opts: Option<DbItemOpts>,
+            // keyless item for scanning
+            keyless: bool,
+        }
+
+        let mut ascending = vec![];
+        let mut btree = BTreeC::new(|a: &DbItem, b: &DbItem| a.key.cmp(&b.key));
+
+        btree.set(DbItem {
+            key: "foo",
+            val: "bar",
+            opts: None,
+            keyless: false,
+        });
+        btree.set(DbItem {
+            key: "fizz",
+            val: "buzz",
+            opts: Some(DbItemOpts {
+                ex: true,
+                exat: std::time::Instant::now(),
+            }),
+            keyless: false,
+        });
+        assert_eq!(btree.count(), 2);
+
+        btree.ascend(None, |item| {
+            eprintln!("item {:#?}", item);
+            ascending.push(format!("{} {} {:#?}", item.key, item.val, item.opts));
+            true
+        });
+    }
 }
