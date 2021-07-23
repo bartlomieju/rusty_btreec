@@ -40,19 +40,17 @@ where
 }
 
 #[repr(C)]
-#[derive(Debug)]
-pub struct BTreeC<T: Debug, F> {
+pub struct BTreeC<T> {
     btree: *mut btree,
-    _compare_fn: Box<F>,
+    compare_fn: Box<dyn Fn(&T, &T) -> Ordering>,
     _phantom: PhantomData<T>,
 }
 
-impl<T: Debug, F> BTreeC<T, F>
-where
-    F: Fn(&T, &T) -> Ordering,
-{
-    pub fn new(compare_fn: F) -> Self {
-        let compare_fn = Box::new(compare_fn);
+impl<T> BTreeC<T> {
+    pub fn new<F: 'static>(compare_fn: Box<F>) -> Self
+    where
+        F: Fn(&T, &T) -> Ordering,
+    {
         let user_data = unsafe { transmute::<*const F, *mut c_void>(&*compare_fn) };
 
         let p = unsafe {
@@ -65,8 +63,16 @@ where
         };
         Self {
             btree: p,
-            _compare_fn: compare_fn,
+            compare_fn: compare_fn,
             _phantom: PhantomData,
+        }
+    }
+
+    pub fn less(&self, a: &T, b: &T) -> bool {
+        if (self.compare_fn)(a, b) == Ordering::Less {
+            true
+        } else {
+            false
         }
     }
 
@@ -209,7 +215,7 @@ where
     }
 }
 
-impl<T: Debug, F> Drop for BTreeC<T, F> {
+impl<T> Drop for BTreeC<T> {
     fn drop(&mut self) {
         unsafe { btree_free(self.btree) }
     }
@@ -234,12 +240,13 @@ mod tests {
 
     #[test]
     fn btreec_new() {
-        let mask = 0x12345678u64;
-        let btree = BTreeC::new(|a: &u64, b: &u64| {
+        let compare_fn = Box::new(|a: &u64, b: &u64| {
+            let mask = 0x12345678u64;
             let a = *a ^ mask;
             let b = *b ^ mask;
             a.cmp(&b)
         });
+        let btree = BTreeC::new(compare_fn);
         assert_eq!(btree.count(), 0);
         assert_eq!(btree.height(), 0);
         assert!(!btree.oom());
@@ -254,7 +261,8 @@ mod tests {
             value: i64,
         }
 
-        let mut btree = BTreeC::new(|a: &TestItem, b: &TestItem| a.key.cmp(&b.key));
+        let compare_fn = Box::new(|a: &TestItem, b: &TestItem| a.key.cmp(&b.key));
+        let mut btree = BTreeC::new(compare_fn);
 
         // we'll use this struct for querying the tree
         // value is ignored in this case, because we're only comparing keys in the `compare` function
@@ -292,7 +300,8 @@ mod tests {
 
     #[test]
     fn min_max_pop() {
-        let mut btree = BTreeC::new(|a: &i64, b: &i64| a.cmp(b));
+        let compare_fn = Box::new(|a: &i64, b: &i64| a.cmp(b));
+        let mut btree = BTreeC::new(compare_fn);
         btree.set(3);
         btree.set(4);
         btree.set(5);
@@ -315,7 +324,7 @@ mod tests {
         let mut descending = vec![];
         let mut descending_with_pivot = vec![];
 
-        let mut btree = BTreeC::new(|a: &User, b: &User| {
+        let compare_fn = Box::new(|a: &User, b: &User| {
             let mut result = a.last.cmp(&b.last);
 
             if result == Ordering::Equal {
@@ -324,6 +333,7 @@ mod tests {
 
             result
         });
+        let mut btree = BTreeC::new(compare_fn);
 
         btree.set(User::new("Dale", "Murphy", 44));
         btree.set(User::new("Roger", "Craig", 68));
@@ -390,7 +400,8 @@ mod tests {
         }
 
         let mut ascending = vec![];
-        let mut btree = BTreeC::new(|a: &DbItem, b: &DbItem| a.key.cmp(&b.key));
+        let compare_fn = Box::new(|a: &DbItem, b: &DbItem| a.key.cmp(&b.key));
+        let mut btree = BTreeC::new(compare_fn);
 
         btree.set(DbItem {
             key: "foo",
