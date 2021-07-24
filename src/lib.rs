@@ -5,6 +5,7 @@
 include!("./bindings.rs");
 
 use std::cmp::Ordering;
+use std::convert::TryInto;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem::size_of;
@@ -55,7 +56,7 @@ impl<T> BTreeC<T> {
 
         let p = unsafe {
             btree_new(
-                size_of::<T>() as u64,
+                size_of::<T>().try_into().unwrap(),
                 0,
                 compare_trampoline::<T, F>,
                 user_data,
@@ -63,17 +64,13 @@ impl<T> BTreeC<T> {
         };
         Self {
             btree: p,
-            compare_fn: compare_fn,
+            compare_fn,
             _phantom: PhantomData,
         }
     }
 
     pub fn less(&self, a: &T, b: &T) -> bool {
-        if (self.compare_fn)(a, b) == Ordering::Less {
-            true
-        } else {
-            false
-        }
+        (self.compare_fn)(a, b) == Ordering::Less
     }
 
     pub fn oom(&self) -> bool {
@@ -81,11 +78,13 @@ impl<T> BTreeC<T> {
     }
 
     pub fn height(&self) -> u64 {
-        unsafe { btree_height(self.btree) }
+        #[allow(clippy::useless_conversion)]
+        unsafe { btree_height(self.btree) }.into()
     }
 
     pub fn count(&self) -> u64 {
-        unsafe { btree_count(self.btree) }
+        #[allow(clippy::useless_conversion)]
+        unsafe { btree_count(self.btree) }.into()
     }
 
     // TODO: should return Option<T>
@@ -189,13 +188,15 @@ impl<T> BTreeC<T> {
         let mut iter_fn = Box::new(iter_fn);
         let user_data = unsafe { transmute::<*mut I, *mut c_void>(&mut *iter_fn) };
 
-        let pivot_ptr = if let Some(pivot) = maybe_pivot {
-            &pivot as *const T as *mut T as *mut c_void
+        let pivot_ptr = if let Some(pivot) = &maybe_pivot {
+            pivot as *const T as *mut T as *mut c_void
         } else {
             std::ptr::null::<T>() as *mut c_void
         };
 
-        unsafe { btree_ascend(self.btree, pivot_ptr, iter_trampoline::<T, I>, user_data) }
+        let r = unsafe { btree_ascend(self.btree, pivot_ptr, iter_trampoline::<T, I>, user_data) };
+        drop(maybe_pivot);
+        r
     }
 
     pub fn descend<I>(&self, maybe_pivot: Option<T>, iter_fn: I) -> bool
@@ -295,7 +296,7 @@ mod tests {
         assert_eq!(item.value, 2);
 
         assert!(btree.delete(key.clone()).is_some());
-        assert!(btree.get(key.clone()).is_none());
+        assert!(btree.get(key).is_none());
     }
 
     #[test]
