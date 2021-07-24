@@ -10,6 +10,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::mem::transmute;
 use std::ptr;
+use std::convert::TryInto;
 
 unsafe extern "C" fn compare_trampoline<T, F>(
     a: *const c_void,
@@ -55,7 +56,7 @@ impl<T> BTreeC<T> {
 
         let p = unsafe {
             btree_new(
-                size_of::<T>() as u64,
+                size_of::<T>().try_into().unwrap(),
                 0,
                 compare_trampoline::<T, F>,
                 user_data,
@@ -77,11 +78,13 @@ impl<T> BTreeC<T> {
     }
 
     pub fn height(&self) -> u64 {
-        unsafe { btree_height(self.btree) }
+        #[allow(clippy::useless_conversion)]
+        unsafe { btree_height(self.btree) }.into()
     }
 
     pub fn count(&self) -> u64 {
-        unsafe { btree_count(self.btree) }
+        #[allow(clippy::useless_conversion)]
+        unsafe { btree_count(self.btree) }.into()
     }
 
     // TODO: should return Option<T>
