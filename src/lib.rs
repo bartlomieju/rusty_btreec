@@ -63,17 +63,13 @@ impl<T> BTreeC<T> {
         };
         Self {
             btree: p,
-            compare_fn: compare_fn,
+            compare_fn,
             _phantom: PhantomData,
         }
     }
 
     pub fn less(&self, a: &T, b: &T) -> bool {
-        if (self.compare_fn)(a, b) == Ordering::Less {
-            true
-        } else {
-            false
-        }
+        (self.compare_fn)(a, b) == Ordering::Less
     }
 
     pub fn oom(&self) -> bool {
@@ -189,13 +185,15 @@ impl<T> BTreeC<T> {
         let mut iter_fn = Box::new(iter_fn);
         let user_data = unsafe { transmute::<*mut I, *mut c_void>(&mut *iter_fn) };
 
-        let pivot_ptr = if let Some(pivot) = maybe_pivot {
-            &pivot as *const T as *mut T as *mut c_void
+        let pivot_ptr = if let Some(pivot) = &maybe_pivot {
+            pivot as *const T as *mut T as *mut c_void
         } else {
             std::ptr::null::<T>() as *mut c_void
         };
 
-        unsafe { btree_ascend(self.btree, pivot_ptr, iter_trampoline::<T, I>, user_data) }
+        let r = unsafe { btree_ascend(self.btree, pivot_ptr, iter_trampoline::<T, I>, user_data) };
+        drop(maybe_pivot);
+        r
     }
 
     pub fn descend<I>(&self, maybe_pivot: Option<T>, iter_fn: I) -> bool
@@ -295,7 +293,7 @@ mod tests {
         assert_eq!(item.value, 2);
 
         assert!(btree.delete(key.clone()).is_some());
-        assert!(btree.get(key.clone()).is_none());
+        assert!(btree.get(key).is_none());
     }
 
     #[test]
@@ -425,5 +423,57 @@ mod tests {
             ascending.push(format!("{} {} {:#?}", item.key, item.val, item.opts));
             true
         });
+    }
+
+    #[test]
+    fn ascend_with_pivot_number() {
+        struct KV {
+            key: String,
+            val: i64,
+        }
+
+        let compare_fn = Box::new(|a: &KV, b: &KV| {
+            eprintln!(
+                "compare fn a key: {} a val: {} b key: {} b val: {}",
+                a.key, a.val, b.key, b.val
+            );
+            if a.val < b.val {
+                return Ordering::Less;
+            }
+            if b.val < a.val {
+                return Ordering::Greater;
+            }
+
+            // fallback to key comparison
+            a.key.cmp(&b.key)
+        });
+        let mut btree = BTreeC::new(compare_fn);
+
+        for i in 0..30 {
+            btree.set(KV {
+                key: format!("key:{:05}A", i),
+                val: i + 1000,
+            });
+            btree.set(KV {
+                key: format!("key:{:05}B", i),
+                val: i + 1000,
+            });
+        }
+
+        assert_eq!(btree.count(), 60);
+
+        let mut res = Vec::new();
+        let res_mut = &mut res;
+
+        let pivot = Some(KV {
+            key: String::new(),
+            val: 1005,
+        });
+        btree.ascend(pivot, |item| {
+            res_mut.push(item.key.to_string());
+            res_mut.push(item.val.to_string());
+            true
+        });
+        assert_eq!(res, vec!["00005A", "1005", "00005B", "1005"]);
     }
 }
