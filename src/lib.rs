@@ -5,12 +5,12 @@
 include!("./bindings.rs");
 
 use std::cmp::Ordering;
+use std::convert::TryInto;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::mem::transmute;
 use std::ptr;
-use std::convert::TryInto;
 
 unsafe extern "C" fn compare_trampoline<T, F>(
     a: *const c_void,
