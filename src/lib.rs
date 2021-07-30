@@ -43,14 +43,17 @@ where
 #[repr(C)]
 pub struct BTreeC<T> {
     btree: *mut btree,
-    compare_fn: Box<dyn Fn(&T, &T) -> Ordering>,
+    compare_fn: Box<dyn Fn(&T, &T) -> Ordering + Send + Sync>,
     _phantom: PhantomData<T>,
 }
+
+unsafe impl<T> Send for BTreeC<T> {}
+unsafe impl<T> Sync for BTreeC<T> {}
 
 impl<T> BTreeC<T> {
     pub fn new<F: 'static>(compare_fn: Box<F>) -> Self
     where
-        F: Fn(&T, &T) -> Ordering,
+        F: Fn(&T, &T) -> Ordering + Send + Sync,
     {
         let user_data = unsafe { transmute::<*const F, *mut c_void>(&*compare_fn) };
 
